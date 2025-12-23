@@ -1,0 +1,452 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>雙手節奏光劍 - 網頁版</title>
+    <style>
+        body {
+            margin: 0;
+            background-color: #050505;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            transform: scaleX(-1); /* 鏡像翻轉 */
+        }
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 0;
+            width: 100%;
+            z-index: 10;
+            text-align: center;
+            pointer-events: none; /* 讓點擊穿透到 Canvas */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .hud-panel {
+            background: rgba(0, 0, 0, 0.5);
+            border: 2px solid #00ffcc;
+            border-radius: 15px;
+            padding: 10px 30px;
+            backdrop-filter: blur(5px);
+            box-shadow: 0 0 15px rgba(0, 255, 204, 0.3);
+            margin-bottom: 10px;
+        }
+        #score-board {
+            font-size: 48px;
+            font-weight: 900;
+            color: #fff;
+            text-shadow: 0 0 10px #fff, 0 0 20px #00ffcc;
+            margin: 0;
+        }
+        #combo-board {
+            font-size: 24px;
+            color: #ffeb3b;
+            font-weight: bold;
+            opacity: 0; /* 一開始隱藏 */
+            transition: opacity 0.2s;
+        }
+        #start-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.85);
+            z-index: 20;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+        }
+        button {
+            margin-top: 30px;
+            padding: 15px 50px;
+            font-size: 24px;
+            background: linear-gradient(90deg, #ff0055, #0055ff);
+            color: white;
+            border: none;
+            border-radius: 50px;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+            transition: 0.2s;
+        }
+        button:hover {
+            transform: scale(1.1);
+        }
+        .instruction {
+            display: flex;
+            gap: 50px;
+            margin-top: 20px;
+        }
+        .ins-box {
+            text-align: center;
+        }
+        .color-box {
+            width: 60px;
+            height: 60px;
+            margin: 0 auto 10px;
+            border-radius: 10px;
+            box-shadow: 0 0 15px currentColor;
+        }
+        video { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <div class="hud-panel">
+            <div id="score-board">0</div>
+            <div id="combo-board">COMBO x0</div>
+        </div>
+    </div>
+
+    <div id="start-screen">
+        <h1 style="font-size: 60px; text-shadow: 0 0 20px #fff;">NEON SMASH</h1>
+        <div class="instruction">
+            <div class="ins-box">
+                <div class="color-box" style="background: #0055ff; color: #0055ff;"></div>
+                <p>左手 (Left) 打擊藍色</p>
+            </div>
+            <div class="ins-box">
+                <div class="color-box" style="background: #ff0055; color: #ff0055;"></div>
+                <p>右手 (Right) 打擊紅色</p>
+            </div>
+        </div>
+        <button id="startBtn">START GAME</button>
+        <p id="loading-text" style="color:#aaa; margin-top:20px;">正在啟動攝影機...</p>
+    </div>
+
+    <video id="video" playsinline></video>
+    <canvas id="output"></canvas>
+
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+
+    <script>
+        const videoElement = document.getElementById('video');
+        const canvasElement = document.getElementById('output');
+        const ctx = canvasElement.getContext('2d');
+        const scoreBoard = document.getElementById('score-board');
+        const comboBoard = document.getElementById('combo-board');
+        const startScreen = document.getElementById('start-screen');
+        const startBtn = document.getElementById('startBtn');
+        const loadingText = document.getElementById('loading-text');
+
+        let width, height;
+        let gameActive = false;
+        let score = 0;
+        let combo = 0;
+        let audioCtx;
+
+        // --- 🎮 遊戲物件與邏輯 ---
+        
+        // 敵人 (方塊)
+        class Cube {
+            constructor() {
+                // 從畫面中心生成
+                this.x = width / 2;
+                this.y = height / 2;
+                
+                // 隨機決定目標方向 (往畫面的某個角落或邊緣飛)
+                const angle = Math.random() * Math.PI * 2;
+                const speed = 2 + Math.random() * 2; // 移動速度
+                
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                
+                // 決定類型：0=藍(左手), 1=紅(右手)
+                this.type = Math.random() > 0.5 ? 'red' : 'blue';
+                this.color = this.type === 'red' ? '#ff0055' : '#0055ff';
+                
+                this.size = 1; // 初始大小
+                this.maxSize = 60; // 最大大小 (接近螢幕時)
+                this.growth = 0.5; // 變大速度
+                this.active = true;
+                
+                // 旋轉裝飾
+                this.rotation = Math.random() * Math.PI;
+                this.rotSpeed = (Math.random() - 0.5) * 0.1;
+            }
+
+            update() {
+                this.x += this.vx * (this.size / 10); // 越近移動越快 (透視感)
+                this.y += this.vy * (this.size / 10);
+                this.size += this.growth;
+                this.rotation += this.rotSpeed;
+
+                // 如果超出螢幕，消失
+                if (this.x < -100 || this.x > width + 100 || this.y < -100 || this.y > height + 100) {
+                    this.active = false;
+                    // 如果沒打到，重置 Combo (可選)
+                    if (this.size > 20) { // 只有長大後錯過才算
+                        resetCombo();
+                    }
+                }
+            }
+
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rotation);
+                
+                ctx.shadowBlur = 20;
+                ctx.shadowColor = this.color;
+                ctx.fillStyle = this.color;
+                
+                // 畫出方塊 (中心對齊)
+                ctx.fillRect(-this.size/2, -this.size/2, this.size, this.size);
+                
+                // 畫框線
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(-this.size/2, -this.size/2, this.size, this.size);
+
+                ctx.restore();
+            }
+        }
+
+        // 爆炸粒子
+        class Particle {
+            constructor(x, y, color) {
+                this.x = x;
+                this.y = y;
+                this.color = color;
+                const angle = Math.random() * Math.PI * 2;
+                const speed = Math.random() * 5 + 2;
+                this.vx = Math.cos(angle) * speed;
+                this.vy = Math.sin(angle) * speed;
+                this.life = 1.0;
+                this.decay = Math.random() * 0.03 + 0.02;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.life -= this.decay;
+            }
+            draw() {
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.fillStyle = this.color;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, 4, 0, Math.PI*2);
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+        }
+
+        let cubes = [];
+        let particles = [];
+        let frameCount = 0;
+
+        function spawnCube() {
+            // 每 60 幀 (約1秒) 生成一個，隨著分數提高生成變快
+            const spawnRate = Math.max(20, 60 - Math.floor(score / 5));
+            if (frameCount % spawnRate === 0) {
+                cubes.push(new Cube());
+            }
+            frameCount++;
+        }
+
+        function updateGame() {
+            // 清除畫布
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.9)'; // 留下一點殘影
+            ctx.fillRect(0, 0, width, height);
+
+            // 更新敵人
+            cubes.forEach((cube, index) => {
+                cube.update();
+                cube.draw();
+                if (!cube.active) {
+                    cubes.splice(index, 1);
+                }
+            });
+
+            // 更新粒子
+            particles.forEach((p, index) => {
+                p.update();
+                p.draw();
+                if (p.life <= 0) {
+                    particles.splice(index, 1);
+                }
+            });
+
+            spawnCube();
+        }
+
+        // --- 🔊 音效 ---
+        function playHitSound(type) {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'red') {
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(220, audioCtx.currentTime); // 低音
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            } else {
+                osc.type = 'sine';
+                osc.frequency.setValueAtTime(880, audioCtx.currentTime); // 高音
+                osc.frequency.exponentialRampToValueAtTime(100, audioCtx.currentTime + 0.1);
+            }
+
+            gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        // --- 🖐 互動與碰撞 ---
+        function checkCollision(handX, handY, handType) {
+            // handType: 'Left' or 'Right' (來自 MediaPipe 的標籤)
+            // 遊戲規則: MediaPipe 的 'Left' 是畫面上的左手(實際上是人的左手，因鏡像)，打藍色
+            // MediaPipe 的 'Right' 是畫面上的右手，打紅色
+
+            const targetColor = handType === 'Right' ? 'red' : 'blue';
+
+            cubes.forEach(cube => {
+                if (!cube.active) return;
+                
+                // 只有當方塊夠大 (接近螢幕) 且顏色對應時才能打
+                if (cube.size > 20 && cube.type === targetColor) {
+                    const dx = cube.x - handX;
+                    const dy = cube.y - handY;
+                    const dist = Math.sqrt(dx*dx + dy*dy);
+
+                    // 碰撞判定距離
+                    if (dist < cube.size + 20) {
+                        // HIT!
+                        cube.active = false;
+                        createExplosion(cube.x, cube.y, cube.color);
+                        addScore();
+                        playHitSound(targetColor);
+                    }
+                }
+            });
+        }
+
+        function createExplosion(x, y, color) {
+            for(let i=0; i<15; i++) {
+                particles.push(new Particle(x, y, color));
+            }
+        }
+
+        function addScore() {
+            score++;
+            combo++;
+            scoreBoard.innerText = score;
+            comboBoard.innerText = `COMBO x${combo}`;
+            comboBoard.style.opacity = 1;
+            
+            // UI 動畫
+            scoreBoard.style.transform = "scale(1.2)";
+            setTimeout(() => scoreBoard.style.transform = "scale(1)", 100);
+        }
+
+        function resetCombo() {
+            combo = 0;
+            comboBoard.style.opacity = 0;
+        }
+
+        // --- MediaPipe 處理 ---
+        function onResults(results) {
+            if (!gameActive) return;
+
+            updateGame(); // 繪製遊戲背景與物件
+
+            if (results.multiHandLandmarks) {
+                for (let i = 0; i < results.multiHandLandmarks.length; i++) {
+                    const landmarks = results.multiHandLandmarks[i];
+                    const handedness = results.multiHandedness[i].label; 
+                    // MediaPipe Handedness: 
+                    // 在自拍模式下(無鏡像)，舉起左手會顯示 "Left"。
+                    // 在鏡像模式下(scaleX -1)，視覺上左邊的手會對應到 "Left" 標籤 (如果我們正確對應的話)。
+                    // 這裡我們直接用 label： Left -> Blue, Right -> Red
+
+                    const fingerTip = landmarks[8]; // 食指
+                    const handX = fingerTip.x * width;
+                    const handY = fingerTip.y * height;
+
+                    // 畫出手部游標 (光劍感)
+                    ctx.save();
+                    const color = handedness === 'Right' ? '#ff0055' : '#0055ff'; // 右手紅，左手藍
+                    
+                    // 繪製骨架
+                    drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'white', lineWidth: 2});
+                    
+                    // 繪製指尖光劍
+                    ctx.shadowBlur = 30;
+                    ctx.shadowColor = color;
+                    ctx.fillStyle = color;
+                    ctx.beginPath();
+                    ctx.arc(handX, handY, 20, 0, Math.PI*2);
+                    ctx.fill();
+                    ctx.restore();
+
+                    // 檢查碰撞
+                    checkCollision(handX, handY, handedness);
+                }
+            }
+        }
+
+        // --- 初始化 ---
+        const hands = new Hands({locateFile: (file) => {
+            return `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`;
+        }});
+        hands.setOptions({
+            maxNumHands: 2,
+            modelComplexity: 1,
+            minDetectionConfidence: 0.5,
+            minTrackingConfidence: 0.5
+        });
+        hands.onResults(onResults);
+
+        startBtn.addEventListener('click', async () => {
+            // Audio Context 必須在 user interaction 後啟動
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+
+            startBtn.disabled = true;
+            startBtn.innerText = "LOADING...";
+            
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvasElement.width = width;
+            canvasElement.height = height;
+
+            const camera = new Camera(videoElement, {
+                onFrame: async () => {
+                    await hands.send({image: videoElement});
+                },
+                width: 1280,
+                height: 720
+            });
+            await camera.start();
+            
+            startScreen.style.display = 'none';
+            gameActive = true;
+        });
+
+        window.addEventListener('resize', () => {
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvasElement.width = width;
+            canvasElement.height = height;
+        });
+
+    </script>
+</body>
+</html>
