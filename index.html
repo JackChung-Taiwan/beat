@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 體感節奏：霓虹光劍 (激勵版)</title>
+    <title>AI 體感節奏：霓虹光劍 (文字修正版)</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
 
@@ -20,7 +20,7 @@
             position: absolute;
             top: 0;
             left: 0;
-            transform: scaleX(-1); /* 鏡像翻轉 */
+            transform: scaleX(-1); /* 保持畫布鏡像，這樣操作才直覺 */
         }
         #ui-layer {
             position: absolute;
@@ -62,7 +62,6 @@
             transition: opacity 0.2s, transform 0.1s;
         }
 
-        /* --- 開始畫面設計 --- */
         #start-screen {
             position: absolute;
             top: 0;
@@ -232,7 +231,6 @@
         let combo = 0;
         let audioCtx;
 
-        // --- 鼓勵語清單 ---
         const praiseWords = ["Perfect!", "Good Job!", "Nice!", "Awesome!", "Great!", "Hit!", "Excellent!"];
 
         // --- 🎮 遊戲物件與邏輯 ---
@@ -322,24 +320,21 @@
             }
         }
 
-        // --- ✨ 新增：漂浮激勵文字類別 ---
         class FloatingText {
             constructor(x, y, text, color) {
                 this.x = x;
                 this.y = y;
                 this.text = text;
                 this.color = color;
-                this.life = 1.0; // 生命值
-                this.velocity = 2; // 上升速度
-                this.scale = 0; // 初始大小 (從小變大)
+                this.life = 1.0;
+                this.velocity = 2;
+                this.scale = 0;
                 this.maxScale = 1.5;
             }
 
             update() {
-                this.y -= this.velocity; // 向上飄
-                this.life -= 0.02; // 慢慢消失
-                
-                // 彈性變大效果
+                this.y -= this.velocity; 
+                this.life -= 0.02; 
                 if (this.scale < this.maxScale) {
                     this.scale += 0.2;
                 }
@@ -349,17 +344,19 @@
                 ctx.save();
                 ctx.globalAlpha = Math.max(0, this.life);
                 ctx.translate(this.x, this.y);
-                ctx.scale(this.scale, this.scale);
                 
-                ctx.font = "bold 40px 'Orbitron', sans-serif"; // 使用酷炫字體
+                // --- 關鍵修正：這裡將 X 軸縮放改為負數 ---
+                // 因為外層 Canvas 已經水平翻轉 (scaleX -1)，
+                // 我們這裡再翻轉一次 (scaleX -1)，文字就會變正！
+                ctx.scale(-this.scale, this.scale); 
+                
+                ctx.font = "bold 40px 'Orbitron', sans-serif";
                 ctx.textAlign = "center";
                 ctx.fillStyle = "#fff";
                 
-                // 文字光暈
                 ctx.shadowBlur = 20;
                 ctx.shadowColor = this.color;
                 
-                // 描邊
                 ctx.strokeStyle = this.color;
                 ctx.lineWidth = 2;
                 ctx.strokeText(this.text, 0, 0);
@@ -372,7 +369,7 @@
 
         let cubes = [];
         let particles = [];
-        let floatingTexts = []; // 儲存所有漂浮文字
+        let floatingTexts = []; 
         let frameCount = 0;
 
         function spawnCube() {
@@ -393,7 +390,6 @@
             ctx.fillStyle = 'rgba(5, 5, 10, 0.2)';
             ctx.fillRect(0, 0, width, height);
 
-            // 更新與繪製方塊
             cubes.forEach((cube, index) => {
                 cube.update();
                 cube.draw();
@@ -402,7 +398,6 @@
                 }
             });
 
-            // 更新與繪製粒子
             particles.forEach((p, index) => {
                 p.update();
                 p.draw();
@@ -411,7 +406,6 @@
                 }
             });
 
-            // --- ✨ 更新與繪製漂浮文字 ---
             floatingTexts.forEach((ft, index) => {
                 ft.update();
                 ft.draw();
@@ -464,7 +458,6 @@
                         cube.active = false;
                         createExplosion(cube.x, cube.y, cube.color);
                         
-                        // --- ✨ 觸發激勵文字 ---
                         const randomPraise = praiseWords[Math.floor(Math.random() * praiseWords.length)];
                         floatingTexts.push(new FloatingText(cube.x, cube.y, randomPraise, cube.color));
                         
