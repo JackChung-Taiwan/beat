@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AI 體感節奏：科教館互動遊戲 </title>
+    <title>Neon Strike: Audio Enhanced</title>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
 
@@ -20,7 +20,7 @@
             position: absolute;
             top: 0;
             left: 0;
-            transform: scaleX(-1); /* 保持畫布鏡像，這樣操作才直覺 */
+            transform: scaleX(-1);
         }
         #ui-layer {
             position: absolute;
@@ -68,7 +68,7 @@
             left: 0;
             width: 100%;
             height: 100%;
-            background: rgba(5, 5, 10, 0.9);
+            background: rgba(5, 5, 10, 0.95);
             z-index: 20;
             display: flex;
             flex-direction: column;
@@ -174,6 +174,13 @@
             font-weight: bold;
         }
 
+        #music-status {
+            margin-top: 15px;
+            font-size: 12px;
+            color: #00ffcc;
+            opacity: 0.8;
+        }
+
         video { display: none; }
     </style>
 </head>
@@ -204,6 +211,7 @@
         </div>
 
         <button id="startBtn">START GAME</button>
+        <div id="music-status">♫ 背景音樂將自動合成生成</div>
         <p id="loading-text" style="color:#666; margin-top:20px; font-size: 14px;">等待攝影機權限...</p>
     </div>
 
@@ -230,29 +238,199 @@
         let score = 0;
         let combo = 0;
         let audioCtx;
+        
+        // --- 🎵 音樂與音效系統 (MusicSynthesizer) ---
+        class MusicSynthesizer {
+            constructor() {
+                this.ctx = null;
+                this.isPlaying = false;
+                this.tempo = 125; // BPM
+                this.nextNoteTime = 0;
+                this.beatCount = 0;
+                this.timerID = null;
+                this.lookahead = 25.0; // ms
+                this.scheduleAheadTime = 0.1; // sec
+            }
 
+            init(context) {
+                this.ctx = context;
+            }
+
+            // 播放大鼓 (Kick)
+            playKick(time) {
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+                osc.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.frequency.setValueAtTime(150, time);
+                osc.frequency.exponentialRampToValueAtTime(0.01, time + 0.5);
+                
+                gain.gain.setValueAtTime(0.8, time);
+                gain.gain.exponentialRampToValueAtTime(0.01, time + 0.5);
+
+                osc.start(time);
+                osc.stop(time + 0.5);
+            }
+
+            // 播放 Hi-Hat
+            playHiHat(time) {
+                const bufferSize = this.ctx.sampleRate * 0.1; // 0.1秒噪音
+                const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+                const data = buffer.getChannelData(0);
+                for (let i = 0; i < bufferSize; i++) {
+                    data[i] = Math.random() * 2 - 1;
+                }
+
+                const noise = this.ctx.createBufferSource();
+                noise.buffer = buffer;
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.value = 5000;
+                const gain = this.ctx.createGain();
+
+                noise.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                gain.gain.setValueAtTime(0.3, time);
+                gain.gain.exponentialRampToValueAtTime(0.01, time + 0.1);
+
+                noise.start(time);
+            }
+
+            // 播放 Bass Synth
+            playBass(time, freq) {
+                const osc = this.ctx.createOscillator();
+                osc.type = 'sawtooth';
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'lowpass';
+                const gain = this.ctx.createGain();
+
+                osc.connect(filter);
+                filter.connect(gain);
+                gain.connect(this.ctx.destination);
+
+                osc.frequency.value = freq;
+                
+                // Filter Envelope (Wah 效果)
+                filter.frequency.setValueAtTime(freq * 1.5, time);
+                filter.frequency.exponentialRampToValueAtTime(freq, time + 0.3);
+
+                gain.gain.setValueAtTime(0.3, time);
+                gain.gain.exponentialRampToValueAtTime(0.01, time + 0.4);
+
+                osc.start(time);
+                osc.stop(time + 0.4);
+            }
+
+            // 節奏排程器
+            scheduler() {
+                while (this.nextNoteTime < this.ctx.currentTime + this.scheduleAheadTime) {
+                    this.scheduleNote(this.beatCount, this.nextNoteTime);
+                    this.nextNote();
+                }
+                this.timerID = setTimeout(() => this.scheduler(), this.lookahead);
+            }
+
+            nextNote() {
+                const secondsPerBeat = 60.0 / this.tempo;
+                this.nextNoteTime += 0.25 * secondsPerBeat; // 16分音符
+                this.beatCount++;
+                if (this.beatCount === 16) this.beatCount = 0; // 4/4拍, 16個16分音符為一小節
+            }
+
+            scheduleNote(beatNumber, time) {
+                // 1. Kick: 每拍一次 (0, 4, 8, 12)
+                if (beatNumber % 4 === 0) {
+                    this.playKick(time);
+                }
+
+                // 2. Hi-Hat: 反拍 (2, 6, 10, 14) 甚至更多
+                if (beatNumber % 2 === 0) {
+                   // Open hat on off-beat? Just closed hats for now
+                }
+                if (beatNumber % 4 === 2) {
+                    this.playHiHat(time);
+                }
+
+                // 3. Bassline: 簡單的 Cyberpunk 律動
+                // F根音 (43.65Hz) -> G# (51.91Hz) -> A# (58.27Hz)
+                const bassNotes = [43.65, 43.65, 0, 43.65,  51.91, 0, 58.27, 0,  43.65, 43.65, 0, 58.27,  51.91, 0, 0, 0];
+                const note = bassNotes[beatNumber];
+                if (note > 0) {
+                    this.playBass(time, note);
+                }
+            }
+
+            start() {
+                if (this.isPlaying) return;
+                this.isPlaying = true;
+                this.nextNoteTime = this.ctx.currentTime + 0.1;
+                this.beatCount = 0;
+                this.scheduler();
+            }
+
+            stop() {
+                this.isPlaying = false;
+                clearTimeout(this.timerID);
+            }
+        }
+
+        const musicSynth = new MusicSynthesizer();
+
+        // --- 💥 強化版音效 (SFX) ---
+        function playHitSound(type) {
+            if (!audioCtx) return;
+            const t = audioCtx.currentTime;
+            
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+
+            if (type === 'red') {
+                // 紅色 (Right): 高頻雷射聲
+                osc.type = 'sawtooth';
+                osc.frequency.setValueAtTime(880, t); // A5
+                osc.frequency.exponentialRampToValueAtTime(110, t + 0.2);
+                
+                gain.gain.setValueAtTime(0.5, t);
+                gain.gain.exponentialRampToValueAtTime(0.01, t + 0.2);
+                
+                osc.start(t);
+                osc.stop(t + 0.2);
+            } else {
+                // 藍色 (Left): 重擊低頻
+                osc.type = 'square';
+                osc.frequency.setValueAtTime(150, t);
+                osc.frequency.exponentialRampToValueAtTime(40, t + 0.15);
+                
+                gain.gain.setValueAtTime(0.6, t);
+                gain.gain.exponentialRampToValueAtTime(0.01, t + 0.15);
+                
+                osc.start(t);
+                osc.stop(t + 0.15);
+            }
+        }
+
+        // --- 遊戲邏輯 ---
         const praiseWords = ["Perfect!", "Good Job!", "Nice!", "Awesome!", "Great!", "Hit!", "Excellent!"];
 
-        // --- 🎮 遊戲物件與邏輯 ---
         class Cube {
             constructor() {
                 this.x = width / 2;
                 this.y = height / 2;
-                
                 const angle = Math.random() * Math.PI * 2;
                 const speed = 3 + Math.random() * 2.5; 
-                
                 this.vx = Math.cos(angle) * speed;
                 this.vy = Math.sin(angle) * speed;
-                
                 this.type = Math.random() > 0.5 ? 'red' : 'blue';
                 this.color = this.type === 'red' ? '#ff0055' : '#0088ff';
-                
                 this.size = 1;
                 this.maxSize = 70; 
                 this.growth = 0.6; 
                 this.active = true;
-                
                 this.rotation = Math.random() * Math.PI;
                 this.rotSpeed = (Math.random() - 0.5) * 0.15;
             }
@@ -262,12 +440,9 @@
                 this.y += this.vy * (this.size / 10);
                 this.size += this.growth;
                 this.rotation += this.rotSpeed;
-
                 if (this.x < -100 || this.x > width + 100 || this.y < -100 || this.y > height + 100) {
                     this.active = false;
-                    if (this.size > 20) {
-                        resetCombo();
-                    }
+                    if (this.size > 20) resetCombo();
                 }
             }
 
@@ -275,20 +450,15 @@
                 ctx.save();
                 ctx.translate(this.x, this.y);
                 ctx.rotate(this.rotation);
-                
                 ctx.shadowBlur = this.size / 2;
                 ctx.shadowColor = this.color;
-                
                 ctx.strokeStyle = this.color;
                 ctx.lineWidth = 4;
                 ctx.strokeRect(-this.size/2, -this.size/2, this.size, this.size);
-                
                 ctx.fillStyle = this.color + "40"; 
                 ctx.fillRect(-this.size/2, -this.size/2, this.size, this.size);
-                
                 ctx.fillStyle = "#fff";
                 ctx.fillRect(-this.size/8, -this.size/8, this.size/4, this.size/4);
-
                 ctx.restore();
             }
         }
@@ -331,38 +501,26 @@
                 this.scale = 0;
                 this.maxScale = 1.5;
             }
-
             update() {
                 this.y -= this.velocity; 
                 this.life -= 0.02; 
-                if (this.scale < this.maxScale) {
-                    this.scale += 0.2;
-                }
+                if (this.scale < this.maxScale) this.scale += 0.2;
             }
-
             draw() {
                 ctx.save();
                 ctx.globalAlpha = Math.max(0, this.life);
                 ctx.translate(this.x, this.y);
-                
-                // --- 關鍵修正：這裡將 X 軸縮放改為負數 ---
-                // 因為外層 Canvas 已經水平翻轉 (scaleX -1)，
-                // 我們這裡再翻轉一次 (scaleX -1)，文字就會變正！
+                // 修正文字鏡像問題
                 ctx.scale(-this.scale, this.scale); 
-                
                 ctx.font = "bold 40px 'Orbitron', sans-serif";
                 ctx.textAlign = "center";
                 ctx.fillStyle = "#fff";
-                
                 ctx.shadowBlur = 20;
                 ctx.shadowColor = this.color;
-                
                 ctx.strokeStyle = this.color;
                 ctx.lineWidth = 2;
                 ctx.strokeText(this.text, 0, 0);
-                
                 ctx.fillText(this.text, 0, 0);
-                
                 ctx.restore();
             }
         }
@@ -386,81 +544,43 @@
             gradient.addColorStop(1, "rgba(0, 0, 0, 0.4)");
             ctx.fillStyle = gradient;
             ctx.fillRect(0, 0, width, height);
-            
             ctx.fillStyle = 'rgba(5, 5, 10, 0.2)';
             ctx.fillRect(0, 0, width, height);
 
             cubes.forEach((cube, index) => {
                 cube.update();
                 cube.draw();
-                if (!cube.active) {
-                    cubes.splice(index, 1);
-                }
+                if (!cube.active) cubes.splice(index, 1);
             });
 
             particles.forEach((p, index) => {
                 p.update();
                 p.draw();
-                if (p.life <= 0) {
-                    particles.splice(index, 1);
-                }
+                if (p.life <= 0) particles.splice(index, 1);
             });
 
             floatingTexts.forEach((ft, index) => {
                 ft.update();
                 ft.draw();
-                if (ft.life <= 0) {
-                    floatingTexts.splice(index, 1);
-                }
+                if (ft.life <= 0) floatingTexts.splice(index, 1);
             });
 
             spawnCube();
         }
 
-        function playHitSound(type) {
-            if (!audioCtx) return;
-            const osc = audioCtx.createOscillator();
-            const gain = audioCtx.createGain();
-            
-            osc.connect(gain);
-            gain.connect(audioCtx.destination);
-
-            if (type === 'red') {
-                osc.type = 'sawtooth';
-                osc.frequency.setValueAtTime(150, audioCtx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-                gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-            } else {
-                osc.type = 'square';
-                osc.frequency.setValueAtTime(600, audioCtx.currentTime);
-                osc.frequency.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-                gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
-                gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.15);
-            }
-
-            osc.start();
-            osc.stop(audioCtx.currentTime + 0.15);
-        }
-
         function checkCollision(handX, handY, handType) {
             const targetColor = handType === 'Right' ? 'red' : 'blue';
-
             cubes.forEach(cube => {
                 if (!cube.active) return;
-                
                 if (cube.size > 20 && cube.type === targetColor) {
                     const dx = cube.x - handX;
                     const dy = cube.y - handY;
                     const dist = Math.sqrt(dx*dx + dy*dy);
-
                     if (dist < cube.size + 30) {
                         cube.active = false;
                         createExplosion(cube.x, cube.y, cube.color);
-                        
                         const randomPraise = praiseWords[Math.floor(Math.random() * praiseWords.length)];
                         floatingTexts.push(new FloatingText(cube.x, cube.y, randomPraise, cube.color));
-                        
                         addScore();
                         playHitSound(targetColor);
                     }
@@ -491,9 +611,7 @@
 
         function onResults(results) {
             if (!gameActive) return;
-
             updateGame();
-
             if (results.multiHandLandmarks) {
                 for (let i = 0; i < results.multiHandLandmarks.length; i++) {
                     const landmarks = results.multiHandLandmarks[i];
@@ -504,22 +622,18 @@
 
                     ctx.save();
                     const color = handedness === 'Right' ? '#ff0055' : '#0088ff';
-                    
                     drawConnectors(ctx, landmarks, HAND_CONNECTIONS, {color: 'rgba(255,255,255,0.5)', lineWidth: 2});
-                    
                     ctx.shadowBlur = 40;
                     ctx.shadowColor = color;
                     ctx.fillStyle = color;
                     ctx.beginPath();
                     ctx.arc(handX, handY, 15, 0, Math.PI*2);
                     ctx.fill();
-                    
                     ctx.strokeStyle = '#fff';
                     ctx.lineWidth = 3;
                     ctx.beginPath();
                     ctx.arc(handX, handY, 25, 0, Math.PI*2);
                     ctx.stroke();
-
                     ctx.restore();
 
                     checkCollision(handX, handY, handedness);
@@ -541,6 +655,10 @@
         startBtn.addEventListener('click', async () => {
             const AudioContext = window.AudioContext || window.webkitAudioContext;
             audioCtx = new AudioContext();
+            
+            // 初始化並啟動音樂合成器
+            musicSynth.init(audioCtx);
+            musicSynth.start();
 
             startBtn.innerText = "LOADING...";
             loadingText.innerText = "正在啟動視覺神經網絡...";
@@ -573,7 +691,3 @@
     </script>
 </body>
 </html>
-
-
-
-
